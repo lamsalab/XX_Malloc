@@ -57,19 +57,11 @@ size_t roundUp(long long v) {
     v++;
     return v;
   }
-}/*
-   long long roundUpx(long long v) {
-   int leading = __builtin_clzll(v);
-   int trailing = __builtin_ctzll(v);
+}
 
-   if (abs(leading - trailing) == 1) {
-   return v;
-   }
-   else {
-   return 1<<(8 - leading + 1);
-   }
-   }*/
-
+void* xxmallocHelper() {
+  
+}
   
 /**
  * Allocate space on the heap.
@@ -108,6 +100,7 @@ void* xxmalloc(size_t size) {
     return p;
   }
   else {
+    xxmallocHelper(size_t size_small, void * ret, );
     int index = (log10 (size_small)/log10(2)) - (log10(16)/ log10(2));
     if (arr [index] == false) {
       void * p = mmap (NULL, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
@@ -169,21 +162,6 @@ void* xxmalloc(size_t size) {
     }
   }
 }
-
-/**
- * Free space occupied by a heap object.
- * \param ptr   A pointer somewhere inside the object that is being freed
- */
-void xxfree(void* ptr) {
-    size_t size = xxmalloc_usable_size(ptr);
-    ptr = ((intptr_t)ptr / size) * size;
-    node * new;
-    new = (node*) ptr;
-    int index = (log10 (size)/log10(2)) - (log10(16)/ log10(2));
-    new->next = pointers[index];
-    pointer[index] = new;
-}
-
 /**
  * Get the available size of an allocated object
  * \param ptr   A pointer somewhere inside the allocated object
@@ -191,9 +169,26 @@ void xxfree(void* ptr) {
  */
 size_t xxmalloc_usable_size(void* ptr) {
   // We aren't tracking the size of allocated objects yet, so all we know is that it's at least PAGE_SIZE bytes.
-
-  ptr = ((intptr_t)ptr/PAGE_SIZE)* PAGE_SIZE;
-  first* temp = (void *)ptr;
+  intptr_t cur = (intptr_t) ptr;  
+  cur = (cur/PAGE_SIZE)* PAGE_SIZE;
+  first* temp = (void *)cur;
   return temp->size;
+}
+
+
+
+/**
+ * Free space occupied by a heap object.
+ * \param ptr   A pointer somewhere inside the object that is being freed
+ */
+void xxfree(void* ptr) {
+    size_t size = xxmalloc_usable_size(ptr);
+    intptr_t cur = (intptr_t)ptr;
+    cur = (cur/ size) * size;
+    node * new;
+    new = (void*)cur;
+    int index = (log10 (size)/log10(2)) - (log10(16)/ log10(2));
+    new->next = pointers[index];
+    pointers[index] = new;
 }
 
