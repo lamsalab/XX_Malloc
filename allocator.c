@@ -25,7 +25,7 @@ typedef struct node {
 typedef struct first {
   int size;
   struct node * head;
-  struct node * next;
+  struct first * next;
 } first;
 
 // USE ONLY IN CASE OF EMERGENCY
@@ -59,9 +59,51 @@ size_t roundUp(long long v) {
   }
 }
 
-void* xxmallocHelper() {
-  
-}
+struct first* xxmallocHelper(size_t size_small, int index) {
+  void * p = mmap (NULL, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+  if(p == MAP_FAILED) {
+        use_emergency_block = true;
+        perror("mmap");
+        exit(2);
+      }
+  //pointers[index] = p;
+  //arr[index] = true;
+      //for the allocating loop
+      int starting_index;
+      int no_of_chunks = PAGE_SIZE/size_small;
+      intptr_t temp = (intptr_t)p;
+      first * start = p;
+      //for 16 bytes
+      if (index == 0) {
+        starting_index = 2;
+        temp = temp + (size_small * 2);
+        start->head = (void *)temp;
+      }
+      //for the rest
+      else {
+        starting_index = 1;
+        temp = temp + size_small;
+        start->head = (void *)temp;
+      }
+      //Set up the header.
+      start->size = size_small;
+      start->next = NULL;
+      for (int i = starting_index; i < no_of_chunks; i++) {
+        node * n = (void *)temp;
+        n->next = (void *)(temp + size_small);
+        temp = temp + size_small;
+        if (i == no_of_chunks - 1) {
+          n->next = NULL;
+        }
+      }
+      first * ret;
+      ret = start;
+
+      //start->head = start->head->next;
+      // Done with malloc, so clear this flag
+      //in_malloc = false;
+      return ret;
+      }
   
 /**
  * Allocate space on the heap.
@@ -77,7 +119,7 @@ void* xxmalloc(size_t size) {
   } else if(in_malloc) {
     use_emergency_block = true;
     puts("ERROR! Nested call to malloc. Aborting.\n");
-    exit(2);
+    abort();
   }
   
   // If we call malloc again while this is true, bad things will happen.
@@ -100,12 +142,50 @@ void* xxmalloc(size_t size) {
     return p;
   }
   else {
-    xxmallocHelper(size_t size_small, void * ret, );
+    //xxmallocHelper(size_t size_small, void * ret, );
     int index = (log10 (size_small)/log10(2)) - (log10(16)/ log10(2));
-    if (arr [index] == false) {
-      void * p = mmap (NULL, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-      if(p == MAP_FAILED) {
-        use_emergency_block = true;
+    if (pointers[index] != NULL) {
+      first * start = pointers[index];
+      while (start->head == NULL) {
+        if (start->next != NULL) {
+          start = start->next;
+        } else {
+          break;
+        }
+      }
+      if (start->head == NULL) {
+        first * new_chunk = xxmallocHelper(size_small, index);
+        void* ret;
+        start->next = new_chunk;
+        ret = new_chunk->head;
+        in_malloc = false;
+        return ret;
+      }
+      else {
+        void * ret;
+        ret = start->head;
+        start->head = start->head->next;
+        in_malloc = false;
+        return ret;
+      }
+    }
+    else {      
+      first * new_chunk = xxmallocHelper(size_small, index);
+      pointers[index] = new_chunk;
+      void * ret;
+      ret = new_chunk->head;
+      new_chunk->head = new_chunk->head->next;
+      in_malloc = false;
+      return ret;      
+    }
+  }
+}
+/*    
+          }
+      if (arr [index] == false) {
+        void * p = mmap (NULL, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        if(p == MAP_FAILED) {
+          use_emergency_block = true;
         perror("mmap");
         exit(2);
       }
@@ -157,11 +237,15 @@ void* xxmalloc(size_t size) {
         return ret;
         }
         else {
-          void * p = mmap (NULL, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+          first * start = pointers[index];
+          void * p = mmap (NULL, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0)
+          in_malloc= false;
+          void * s;
+          return s;
         }
     }
   }
-}
+  }*/
 /**
  * Get the available size of an allocated object
  * \param ptr   A pointer somewhere inside the allocated object
