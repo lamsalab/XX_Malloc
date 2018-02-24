@@ -13,27 +13,31 @@
 #define MIN_MALLOC_SIZE 16
 
 // Round a value x up to the next multiple of y
-#define ROUND_UP(x,y) ((x) % (y) == 0 ? (x) : (x) + ((y) - (x) % (y)))  
+#define ROUND_UP(x,y) ((x) % (y) == 0 ? (x) : (x) + ((y) - (x) % (y)))
 
 // The size of a single page of memory, in bytes
 #define PAGE_SIZE 0x1000
 
-typedef struct node {
-  struct node * next;
-} node;
+#define MAGIC_NUMBER 0xD00FCA75
 
-typedef struct first {
-  int size;
-  struct node * head;
-  struct first * next;
-} first;
+typedef struct node_t {
+  struct node_t * next_node;
+} node_t;
+
+typedef struct freelist_header {
+  size_t size;
+  size_t magic_number;
+  struct node_t * free_node;
+  struct freelist_header * next_header;
+} freelist_header;
 
 // USE ONLY IN CASE OF EMERGENCY
 bool in_malloc = false;           // Set whenever we are inside malloc.
 bool use_emergency_block = false; // If set, use the emergency space for allocations
 char emergency_block[1024];       // Emergency space for allocating to print errors
+//Pointer array that stores the pointers to the memory chunk
 void * pointers[8];
-bool arr[8];
+
 
 //https://stackoverflow.com/questions/466204/rounding-up-to-next-power-of-2
 
@@ -42,7 +46,7 @@ size_t roundUp(long long v) {
   int trailing = __builtin_ctzll(v);
 
   if (v < 16) {
-    return (long long) 16;
+    return 16;
   }
   if (abs(leading - trailing) == 1) {
     return v;
@@ -59,41 +63,56 @@ size_t roundUp(long long v) {
   }
 }
 
-struct first* xxmallocHelper(size_t size_small, int index) {
-  void * p = mmap (NULL, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-  if(p == MAP_FAILED) {
+/**
+ * Helper function that does the partitioning of memory based on size.
+ * \param size  The minimium number of bytes that must be allocated
+ * \param index  Index of the pointer array pointing to the memory chunk
+ * \returns     A pointer to the beginning of whole chunk
+ *              This function may return NULL when an error occurs.
+ */
+struct freelist_header* xxmallocHelper(size_t size_small, int index) {
+  void * mem_chunk = mmap (NULL, PAGE_SIZE, PROT_READ
+                           | PROT_WRITE, MAP_ANONYMOUS
+                           | MAP_PRIVATE, -1, 0);
+  
+  if(mem_chunk == MAP_FAILED) {
     use_emergency_block = true;
     perror("mmap");
     exit(2);
   }
+  
   int starting_index;
   int no_of_chunks = PAGE_SIZE/size_small;
-  intptr_t temp = (intptr_t)p;
-  first * start = p;
-  //for 16 bytes
+  intptr_t temp = (intptr_t)mem_chunk;
+  freelist_header * header = mem_chunk;
+  
+  //Creating space for header for 16 bytes
   if (index == 0) {
     starting_index = 2;
     temp = temp + (size_small * 2);
-    start->head = (node *)temp;
-  }
+  }  
   //for the rest
   else {
     starting_index = 1;
     temp = temp + size_small;
-    start->head = (node *)temp;
   }
+  
   //Set up the header.
-  start->size = size_small;
-  start->next = NULL;
+  header->free_node = (node_t *)temp;
+  header->size = size_small;
+  header->next_header = NULL;
+  header->magic_number = MAGIC_NUMBER;
+  
+  //Partitions the memory chunk in a linked list structure 
   for (int i = starting_index; i < no_of_chunks; i++) {
-    node * n = (node *)temp;
-    n->next = (node *)(temp + size_small);
+    node_t * new_node = (node_t *)temp;
+    new_node->next_node = (node_t *)(temp + size_small);
     temp = temp + size_small;
     if (i == no_of_chunks - 1) {
-      n->next = NULL;
+      new_node->next_node = NULL;
     }
   }
-  return start;
+  return header;
 }
   
 /**
@@ -118,168 +137,121 @@ void* xxmalloc(size_t size) {
   
   // Round the size up to the next multiple of the page size
   size_t size_small = roundUp(size);
-
-  void * ret;
   
+  //Pointer to the memory that will be returned
+  void * ret;  
   if (size > 2048) {
     size_t object_size = ROUND_UP(size, PAGE_SIZE);
-    void * p = mmap (NULL, object_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-    if(p == MAP_FAILED) {
+    void * mem_size = mmap (NULL, object_size, PROT_READ
+                            | PROT_WRITE, MAP_ANONYMOUS
+                            | MAP_PRIVATE, -1, 0);
+    
+    if(mem_size == MAP_FAILED) {
       use_emergency_block = true;
       perror("mmap");
       exit(2);
     }
     in_malloc = false;
-    return p;
+    return mem_size;
   }
   else {
+    //Index of the array, which has a pointer to the memory (if allocated)
     int index = (log10 (size_small)/log10(2)) - (log10(16)/ log10(2));
-    //if memeory has already been allocated before   
+    //if memory has already been allocated before   
     if (pointers[index] != NULL) {
-      first * start = pointers[index];
+      freelist_header * header = pointers[index];
       //Traverse till you find a free memory or break if you reach the last chunk
-      while (start->head == NULL) {
-        if (start->next != NULL) {
-          start = start->next;
-          } else {
+      while (header->free_node == NULL) {
+        if (header->next_header != NULL) {
+          header = header->next_header;
+        } else {
           break;
-          }
+        }
       }
+      
       //if all spots have been allocated, allocate a new chunk
-      if (start->head == NULL) {
-        first * chunk = xxmallocHelper(size_small, index);
+      if (header->free_node == NULL) {
+        freelist_header * chunk = xxmallocHelper(size_small, index);
         void* ret;
-        start->next = chunk;
-        start = chunk;
-        ret = chunk->head;
-        start->head = start->head->next;
+        header->next_header = chunk;
+        header = chunk;
+        ret = chunk->free_node;
+        header->free_node = header->free_node->next_node;
         in_malloc = false;
         return ret;
       }
-      //if there is space left
+      //if there is space in any of the chunks of the specified size
       else {
         void * ret;
-        ret = start->head;
-        start->head = start->head->next;
+        ret = header->free_node;
+        header->free_node = header->free_node->next_node;
         in_malloc = false;
         return ret;
       }
     }
-    //if memeory hasnt already been allocated before
+    
+    //if memory hasnt already been allocated before, since pointer[index] is null
     else {      
-      first * chunk = xxmallocHelper(size_small, index);
+      freelist_header * chunk = xxmallocHelper(size_small, index);
       pointers[index] = chunk;
       void * ret;
-      ret = chunk->head;
-      chunk->head = chunk->head->next;
+      ret = chunk->free_node;
+      chunk->free_node = chunk->free_node->next_node;
       in_malloc = false;
       return ret;      
     }
   }
 }
-/*    
-      }
-      if (arr [index] == false) {
-      void * p = mmap (NULL, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-      if(p == MAP_FAILED) {
-      use_emergency_block = true;
-      perror("mmap");
-      exit(2);
-      }
-      pointers[index] = p;
-      arr[index] = true;
-      //for the allocating loop
-      int starting_index;
-      int no_of_chunks = PAGE_SIZE/size_small;
-      intptr_t temp = (intptr_t)p;
-      first * start = p;
-      //for 16 bytes
-      if (index == 0) {
-      starting_index = 2;
-      temp = temp + (size_small * 2);
-      start->head = (void *)temp;
-      }
-      //for the rest
-      else {
-      starting_index = 1;
-      temp = temp + size_small;
-      start->head = (void *)temp;
-      }
-      //Set up the header.
-      start->size = size_small;
-      start->next = NULL;
-      for (int i = starting_index; i < no_of_chunks; i++) {
-      node * n = (void *)temp;
-      n->next = (void *)(temp + size_small);
-      temp = temp + size_small;
-      if (i == no_of_chunks - 1) {
-      n->next = NULL;
-      }
-      }
-      //n->next = NULL;
-      ret = start->head;
 
-      start->head = start->head->next;
-      // Done with malloc, so clear this flag
-      in_malloc = false;
-      return ret;
-      }
-      else {
-      first * start = pointers[index];
-      if (start->head != NULL) {
-      node * cur = start->head;
-      start->head = cur->next;
-      void * ret = cur;
-      in_malloc = false;
-      return ret;
-      }
-      else {
-      first * start = pointers[index];
-      void * p = mmap (NULL, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0)
-      in_malloc= false;
-      void * s;
-      return s;
-      }
-      }
-      }
-      }*/
+/**
+ * Get the available size of an allocated object
+ * \param ptr   A pointer somewhere inside the allocated object
+*  \param size   size of the allocated object (or PAGE_SIZE)
+ * \returns     Pointer to the rounded down multiple of size parameter
+ */
+freelist_header* xxmalloc_round_down (void * ptr, size_t size) {
+    //Rounds down to the header of the page
+  intptr_t temp = (intptr_t)ptr % size;  
+  freelist_header * header = (freelist_header*)(ptr - temp);
+  return header;
+}
+
 /**
  * Get the available size of an allocated object
  * \param ptr   A pointer somewhere inside the allocated object
  * \returns     The number of bytes available for use in this object
  */
 size_t xxmalloc_usable_size(void* ptr) {
-  // We aren't tracking the size of allocated objects yet, so all we know is that it's at least PAGE_SIZE bytes.
-
-  intptr_t temp = (intptr_t)ptr % PAGE_SIZE;
-  
-  first * header = (first*)(ptr - temp);
-  return header->size;
-  /*
-    intptr_t cur = (intptr_t) ptr;  
-    first*temp = (first*)((cur/PAGE_SIZE)* PAGE_SIZE);
-    return temp->size;
-  */
-  
+  return xxmalloc_round_down(ptr, PAGE_SIZE)->size;
 }
 
-
+/**
+ * Check if the magic number exists
+ * \param ptr   A pointer somewhere inside the allocated object
+ * \returns     Magic number
+ */
+size_t xxmalloc_check_magic_number(void* ptr) {
+  return xxmalloc_round_down(ptr, PAGE_SIZE)->magic_number;
+}
 
 /**
  * Free space occupied by a heap object.
  * \param ptr   A pointer somewhere inside the object that is being freed
  */
 void xxfree(void* ptr) {
+  if (ptr == NULL) {
+    return;
+  }
+  size_t header_check = xxmalloc_check_magic_number(ptr);
+  if (header_check =! MAGIC_NUMBER) {
+    return;
+  }
   size_t size = xxmalloc_usable_size(ptr);
-  intptr_t cur = (intptr_t)ptr;
-  cur = (cur/ size) * size;
-  node * new;
-  new = (void*)cur;
-  int index = (log10 (size)/log10(2)) - (log10(16)/ log10(2));
-  first* temp = pointers[index];
-  new->next = temp->head;
-  temp->head = new;
-    
-    
+  freelist_header* temp =  xxmalloc_round_down(ptr, size);
+  freelist_header* header = xxmalloc_round_down(ptr, PAGE_SIZE);;
+  node_t * new;
+  new = (node_t*)temp;
+  new->next_node = header->free_node;
+  header->free_node = new;    
 }
 
